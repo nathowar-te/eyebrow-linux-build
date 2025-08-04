@@ -1,0 +1,17 @@
+name: Jenkins Build Handler
+
+on:
+  repository_dispatch:
+    types: [jenkins_build_complete]
+
+jobs:
+  e2e-test:
+    runs-on: [self-hosted, e2e]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Execute custom script
+        run: |
+          echo "Running my custom github action $(cat /etc/os-release)"
+          echo "Runner labels: ${{ runner.name }}"
