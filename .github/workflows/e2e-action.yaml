@@ -3,6 +3,7 @@ name: Jenkins Build Handler
 on:
   repository_dispatch:
     types: [jenkins_build_complete]
+  workflow_dispatch:
 
 jobs:
   e2e-test:
@@ -14,4 +15,3 @@ jobs:
       - name: Execute custom script
         run: |
           echo "Running my custom github action $(cat /etc/os-release)"
-          echo "Runner labels: ${{ runner.name }}"
