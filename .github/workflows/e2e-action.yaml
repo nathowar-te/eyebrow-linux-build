@@ -12,6 +12,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Execute custom script
-        run: |
-          echo "Running my custom github action $(cat /etc/os-release)"
+      - name: Upload OS release info
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-release
+          path: /etc/os-release
