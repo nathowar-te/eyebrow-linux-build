@@ -9,6 +9,14 @@ jobs:
   e2e-test:
     runs-on: [self-hosted, e2e]
     steps:
+      - name: Debug - Job started
+        run: |
+          echo "E2E test job started successfully"
+          echo "Runner: ${{ runner.name }}"
+          echo "OS: ${{ runner.os }}"
+          whoami
+          pwd
+
       - name: Checkout code
         uses: actions/checkout@v4
 
