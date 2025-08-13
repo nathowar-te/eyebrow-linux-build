@@ -8,6 +8,7 @@ on:
 jobs:
   AssumeRoleAndCallIdentity:
     runs-on:  [self-hosted, e2e]
+    environment: E2E_LAB_ACTION
     steps:
       - name: Debug - Job started
         run: |
