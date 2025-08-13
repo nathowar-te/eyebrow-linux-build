@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: ${ secrets.IAM_AWS_REGION }}
+  AWS_REGION: ${{ secrets.IAM_AWS_REGION }}
   IAM_ROLE: ${{ secrets.IAM_ENGLAB_ROLE }}
 
 jobs:
