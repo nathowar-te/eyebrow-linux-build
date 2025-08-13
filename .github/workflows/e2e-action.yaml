@@ -28,6 +28,7 @@ jobs:
 
   AssumeRoleAndCallIdentity:
     runs-on:  [self-hosted, e2e]
+    environment: IAM_AWS_REGION
     steps:
       - name: Git clone the repository
         uses: actions/checkout@v4
