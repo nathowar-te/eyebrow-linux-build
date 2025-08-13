@@ -35,9 +35,9 @@ jobs:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4.3.1
         with:
-          role-to-assume: ${{ secrets.IAM_ENGLAB_ROLE }}
+          role-to-assume: ${{ env.IAM_ENGLAB_ROLE }}
           role-session-name: GitHubActiionUser
-          aws-region: ${{ secrets.IAM_AWS_REGION }}
+          aws-region: ${{ env.IAM_AWS_REGION }}
       - name: Sts GetCallerIdentity
         run: |
           aws s3 ls
