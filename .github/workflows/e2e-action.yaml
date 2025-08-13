@@ -7,7 +7,6 @@ on:
 
 jobs:
   AssumeRoleAndCallIdentity:
-    environment: "IAM_AWS_REGION"
     runs-on:  [self-hosted, e2e]
     steps:
       - name: Debug - Job started
