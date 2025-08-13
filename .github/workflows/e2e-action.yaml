@@ -25,3 +25,19 @@ jobs:
         with:
           name: os-release
           path: /etc/os-release
+
+  AssumeRoleAndCallIdentity:
+    runs-on:  [self-hosted, e2e]
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v4
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: ${{ secrets.IAM_ENGLAB_ROLE }}
+          role-session-name: GitHubActiionUser
+          aws-region: ${{ secrets.IAM_AWS_REGION }}
+      - name: Sts GetCallerIdentity
+        run: |
+          aws s3 ls
