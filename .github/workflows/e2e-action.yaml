@@ -5,13 +5,10 @@ on:
     types: [jenkins_build_complete]
   workflow_dispatch:
 
-env:
-  AWS_REGION: ${{ secrets.IAM_AWS_REGION }}
-  IAM_ROLE: ${{ secrets.IAM_ENGLAB_ROLE }}
-
 jobs:
-  e2e-test:
-    runs-on: [self-hosted, e2e]
+  AssumeRoleAndCallIdentity:
+    environment: "IAM_AWS_REGION"
+    runs-on:  [self-hosted, e2e]
     steps:
       - name: Debug - Job started
         run: |
@@ -21,27 +18,22 @@ jobs:
           whoami
           pwd
 
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Upload OS release info
-        uses: actions/upload-artifact@v4
-        with:
-          name: os-release
-          path: /etc/os-release
-
-  AssumeRoleAndCallIdentity:
-    runs-on:  [self-hosted, e2e]
-    steps:
       - name: Git clone the repository
         uses: actions/checkout@v4
 
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4.3.1
         with:
-          role-to-assume: ${{ env.IAM_ROLE }}
+          role-to-assume: ${{ vars.IAM_AWS_ROLE }}
           role-session-name: GitHubActiionUser
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ vars.IAM_AWS_REGION }}
+
       - name: Sts GetCallerIdentity
         run: |
           aws s3 ls
+
+      - name: Upload OS release info
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-release
+          path: /etc/os-release
