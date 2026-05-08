@@ -67,4 +67,16 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/ioxclient && \
     rm -rf /tmp/ioxclient.tar.gz /tmp/ioxclient_1.17.0.0_linux_${IOX_ARCH}
 
+# Install te-endpoint-llvm-toolchain
+RUN curl -fsSL https://internal.repo.stg.thousandeyes.com/thousandeyes-apt-key.pub | \
+      gpg --dearmor -o /etc/apt/keyrings/thousandeyes-internal-stg.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/thousandeyes-internal-stg.gpg] https://internal.repo.stg.thousandeyes.com jammy main" \
+      > /etc/apt/sources.list.d/thousandeyes-internal.list && \
+    dpkg --add-architecture arm64 && \
+    apt-get update && \
+    apt-get install --no-install-recommends -y \
+      te-endpoint-llvm-toolchain-21 \
+      te-endpoint-musl-runtime:amd64 \
+      te-endpoint-musl-runtime:arm64
+
 CMD ["/bin/bash", "-c", "source /venv/bin/activate && exec bash"]
