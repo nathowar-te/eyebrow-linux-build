@@ -14,7 +14,7 @@ LOGDIR="${DIR}/logs"
 mkdir -p ${LOGDIR}
 
 # Build the image
-image=$(docker build --build-context eyebrow=${REPO_ROOT} -q "${DIR}")
+image=$(docker build --network=host --allow network.host --build-context eyebrow=${REPO_ROOT} -q "${DIR}")
 
 echo "Using image: ${image}"
 

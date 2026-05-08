@@ -70,10 +70,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Install te-endpoint-llvm-toolchain
 RUN curl -fsSL https://internal.repo.stg.thousandeyes.com/thousandeyes-apt-key.pub | \
       gpg --dearmor -o /etc/apt/keyrings/thousandeyes-internal-stg.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/thousandeyes-internal-stg.gpg] https://internal.repo.stg.thousandeyes.com jammy main" \
+    echo "deb [arch=amd64,arm64 signed-by=/etc/apt/keyrings/thousandeyes-internal-stg.gpg] https://internal.repo.stg.thousandeyes.com jammy main" \
       > /etc/apt/sources.list.d/thousandeyes-internal.list && \
-    dpkg --add-architecture arm64 && \
-    apt-get update && \
+    dpkg --add-architecture amd64 && \
+    apt-get update \
+      -o Dir::Etc::sourcelist="sources.list.d/thousandeyes-internal.list" \
+      -o Dir::Etc::sourceparts="-" \
+      -o APT::Get::List-Cleanup="0" && \
     apt-get install --no-install-recommends -y \
       te-endpoint-llvm-toolchain-21 \
       te-endpoint-musl-runtime:amd64 \
