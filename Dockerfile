@@ -34,9 +34,8 @@ RUN apt install -y python3.12 python3.12-venv python3-pip
 RUN python3.12 -m venv venv && . venv/bin/activate && \
     pip install --no-cache-dir "conan>=1,<2"
 
-RUN --mount=from=eyebrow,target=/eyebrow \
-  ls -la /eyebrow && \
- . venv/bin/activate && pip install -r /eyebrow/scripts/requirements.txt
+RUN --mount=from=python_requirements,source=requirements.txt,target=/tmp/requirements.txt \
+ . venv/bin/activate && pip install -r /tmp/requirements.txt
 
 # Linux build dependencies
 RUN apt install -y libmnl-dev libdbus-1-dev ccache

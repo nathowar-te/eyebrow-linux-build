@@ -198,14 +198,17 @@ echo "Repository root: ${REPO_ROOT}"
 LOGDIR="${DIR}/logs"
 mkdir -p "${LOGDIR}"
 
+requirements_context="$(mktemp -d "${TMPDIR:-/tmp}/eyebrow-linux-build-requirements.XXXXXX")"
+cp "${REPO_ROOT}/scripts/requirements.txt" "${requirements_context}/requirements.txt"
+
 # Build the image. Use an iidfile instead of quiet stdout capture so Docker's
 # progress output remains visible while still giving us the image ID afterward.
 iidfile="$(mktemp "${TMPDIR:-/tmp}/eyebrow-linux-build-image.XXXXXX")"
-trap 'rm -f "${iidfile}"' EXIT
+trap 'rm -f "${iidfile}"; rm -rf "${requirements_context}"' EXIT
 docker build \
     --network=host \
     --allow network.host \
-    --build-context eyebrow="${REPO_ROOT}" \
+    --build-context python_requirements="${requirements_context}" \
     --iidfile "${iidfile}" \
     "${DIR}"
 image="$(<"${iidfile}")"
