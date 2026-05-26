@@ -2,7 +2,10 @@
 
 # Build an Ubuntu 22.04 Linux build container, then either open an interactive
 # shell or run a configure + compile flow inside it. For IOx/Meraki builds,
-# the Docker package step runs on the macOS host after the container build.
+# the CPack package target runs in the container. IOx Docker packaging is split:
+# the Docker build/save runs on the macOS host so Docker Desktop credentials are
+# available, then ioxclient runs in the Linux container because it requires Linux.
+# Meraki Docker packaging runs on the macOS host.
 
 set -euo pipefail
 
@@ -43,7 +46,20 @@ Options:
 
   --target TARGET
       CMake target to build. Can be specified more than once. Defaults to all.
-      For IOx/Meraki host packaging, package is built automatically as well.
+      For IOx/Meraki Docker packaging, package is built automatically as well.
+
+  --run-tests
+      Build the tests target and run unit tests with scripts/test.py inside the container.
+
+  --test-timeout SECONDS
+      Per-test timeout passed to scripts/test.py. Defaults to 600.
+
+  --test-build-config CONFIG
+      Build config passed to scripts/test.py. Defaults from --profile suffix,
+      falling back to Release.
+
+  --coverage
+      Pass --coverage to configure.py and scripts/test.py.
 
   --build-arch ARCH
       Docker package architecture, arm64 or amd64. Defaults from --profile.
@@ -52,7 +68,8 @@ Options:
       Passes -DTE_CONAN_BUILD_PACKAGES=<VALUE>, for example "missing".
 
   --skip-host-package
-      Do not run scripts/docker/package.py on the host after the container build.
+      Do not run scripts/docker/package.py after the container build.
+      IOx packaging normally runs in the container; Meraki packaging runs on the host.
 
   --no-fresh
       Do not pass --fresh to configure.py.
@@ -77,6 +94,10 @@ FRESH="true"
 BUILD_TARGETS=()
 BUILD_ARCH=""
 HOST_PACKAGE="true"
+RUN_TESTS="false"
+TEST_TIMEOUT="600"
+TEST_BUILD_CONFIG=""
+COVERAGE="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -111,6 +132,22 @@ while [[ $# -gt 0 ]]; do
         --target)
             BUILD_TARGETS+=("${2:?Missing value for $1}")
             shift 2
+            ;;
+        --run-tests)
+            RUN_TESTS="true"
+            shift
+            ;;
+        --test-timeout|--test_timeout)
+            TEST_TIMEOUT="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --test-build-config|--test_build_config)
+            TEST_BUILD_CONFIG="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --coverage)
+            COVERAGE="true"
+            shift
             ;;
         --build-arch|--build_arch)
             BUILD_ARCH="${2:?Missing value for $1}"
@@ -159,6 +196,20 @@ if [[ "${#BUILD_TARGETS[@]}" -eq 0 ]]; then
     BUILD_TARGETS=(all)
 fi
 
+if [[ -z "${TEST_BUILD_CONFIG}" ]]; then
+    case "${TARGET_CONAN_PROFILE}" in
+        *-debug)
+            TEST_BUILD_CONFIG="Debug"
+            ;;
+        *-release)
+            TEST_BUILD_CONFIG="Release"
+            ;;
+        *)
+            TEST_BUILD_CONFIG="Release"
+            ;;
+    esac
+fi
+
 if [[ -z "${BUILD_ARCH}" ]]; then
     case "${TARGET_CONAN_PROFILE}" in
         *-x64-*|*x86_64*)
@@ -178,8 +229,42 @@ if [[ "${BUILD_ARCH}" != "arm64" && "${BUILD_ARCH}" != "amd64" ]]; then
     exit 2
 fi
 
+DOCKER_PACKAGE="false"
+PACKAGE_IN_CONTAINER="false"
+PACKAGE_ON_HOST="false"
+if [[ "${HOST_PACKAGE}" == "true" ]]; then
+    case "${LINUX_DISTRO}" in
+        iox)
+            DOCKER_PACKAGE="true"
+            PACKAGE_IN_CONTAINER="true"
+            ;;
+        meraki)
+            DOCKER_PACKAGE="true"
+            PACKAGE_ON_HOST="true"
+            ;;
+    esac
+fi
+
+if [[ "${DOCKER_PACKAGE}" == "true" && "${BUILD_PRODUCT}" != "ENTERPRISE" ]]; then
+    echo "Docker packaging only supports BUILD_PRODUCT=ENTERPRISE, got: ${BUILD_PRODUCT}" >&2
+    exit 2
+fi
+
 container_build_targets=("${BUILD_TARGETS[@]}")
-if [[ "${HOST_PACKAGE}" == "true" && ( "${LINUX_DISTRO}" == "iox" || "${LINUX_DISTRO}" == "meraki" ) ]]; then
+if [[ "${RUN_TESTS}" == "true" ]]; then
+    has_tests_target="false"
+    for target in "${container_build_targets[@]}"; do
+        if [[ "${target}" == "tests" ]]; then
+            has_tests_target="true"
+            break
+        fi
+    done
+    if [[ "${has_tests_target}" == "false" ]]; then
+        container_build_targets+=(tests)
+    fi
+fi
+
+if [[ "${DOCKER_PACKAGE}" == "true" ]]; then
     has_package_target="false"
     for target in "${container_build_targets[@]}"; do
         if [[ "${target}" == "package" ]]; then
@@ -215,7 +300,7 @@ image="$(<"${iidfile}")"
 
 echo "Using image: ${image}"
 
-docker_run_args=(
+base_docker_run_args=(
     --rm
     --privileged
     -v "${REPO_ROOT}:/build"
@@ -226,8 +311,25 @@ docker_run_args=(
     --cap-add NET_ADMIN
 )
 
+find_docker_socket() {
+    DOCKER_SOCKET="${DOCKER_SOCKET:-}"
+    if [[ -z "${DOCKER_SOCKET}" ]]; then
+        for docker_socket_candidate in /var/run/docker.sock "${HOME}/.docker/run/docker.sock"; do
+            if [[ -S "${docker_socket_candidate}" ]]; then
+                DOCKER_SOCKET="${docker_socket_candidate}"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "${DOCKER_SOCKET}" || ! -S "${DOCKER_SOCKET}" ]]; then
+        echo "Docker socket not found. Set DOCKER_SOCKET=/path/to/docker.sock." >&2
+        exit 1
+    fi
+}
+
 if [[ "${RUN_MODE}" == "shell" ]]; then
-    docker run -it "${docker_run_args[@]}" "${image}"
+    docker run -it "${base_docker_run_args[@]}" "${image}"
     exit 0
 fi
 
@@ -253,15 +355,207 @@ if [[ -n "${CONAN_BUILD_PACKAGES}" ]]; then
     configure_args+=(--cmake_add_define TE_CONAN_BUILD_PACKAGES "${CONAN_BUILD_PACKAGES}")
 fi
 
+if [[ "${COVERAGE}" == "true" ]]; then
+    configure_args+=(--coverage)
+fi
+
 ./scripts/configure.py "\${configure_args[@]}"
 cmake --build "${BUILD_DIR}" --parallel "${CONCURRENCY}" --target $(printf "%q " "${container_build_targets[@]}")
+
+if [[ "${RUN_TESTS}" == "true" ]]; then
+    test_args=(
+        --build_dir "${BUILD_DIR}"
+        --build_product "${BUILD_PRODUCT}"
+        --build_config "${TEST_BUILD_CONFIG}"
+        --concurrency "${CONCURRENCY}"
+        --timeout "${TEST_TIMEOUT}"
+    )
+
+    if [[ "${COVERAGE}" == "true" ]]; then
+        test_args+=(--coverage)
+    fi
+
+    ./scripts/test.py "\${test_args[@]}"
+fi
+
 EOF
 )
 
-docker run "${docker_run_args[@]}" "${image}" /bin/bash -lc "${container_script}"
+docker run "${base_docker_run_args[@]}" "${image}" /bin/bash -lc "${container_script}"
 
-if [[ "${HOST_PACKAGE}" == "true" ]]; then
-    if [[ "${LINUX_DISTRO}" != "iox" && "${LINUX_DISTRO}" != "meraki" ]]; then
+if [[ "${PACKAGE_IN_CONTAINER}" == "true" ]]; then
+    version_file="${REPO_ROOT}/${BUILD_DIR}/release/linux.version"
+    installer_dir="${REPO_ROOT}/${BUILD_DIR}/installer/linux"
+    resource_dir="${installer_dir}/${LINUX_DISTRO}"
+
+    if [[ ! -f "${version_file}" ]]; then
+        echo "Cannot package IOx: missing ${version_file}" >&2
+        exit 1
+    fi
+    if [[ ! -d "${resource_dir}" ]]; then
+        echo "Cannot package IOx: missing ${resource_dir}" >&2
+        exit 1
+    fi
+
+    build_version="$(<"${version_file}")"
+    case "${BUILD_ARCH}" in
+        arm64)
+            package_arch="arm64"
+            ;;
+        amd64)
+            package_arch="x64"
+            ;;
+    esac
+
+    installer_base="te-endpoint-agent"
+    case "${BUILD_MODE}" in
+        DEV)
+            installer_base="${installer_base}-dev"
+            ;;
+        STG)
+            installer_base="${installer_base}-stg"
+            ;;
+        PROD)
+            ;;
+        *)
+            echo "Unsupported build mode for IOx packaging: ${BUILD_MODE}" >&2
+            exit 2
+            ;;
+    esac
+
+    installer_name="${installer_base}-${build_version}-${LINUX_DISTRO}-${package_arch}"
+    package_name="Endpoint-Agent-${build_version}-${LINUX_DISTRO}-${package_arch}"
+    docker_image_name="$(printf '%s' "${package_name}" | tr '[:upper:]' '[:lower:]')"
+    installer_archive="${package_name}.tar.gz"
+    installer_path_src="${installer_dir}/${installer_name}.tar.gz"
+    installer_path_dst="${resource_dir}/${installer_archive}"
+
+    if [[ ! -f "${installer_path_src}" ]]; then
+        echo "Cannot package IOx: missing ${installer_path_src}" >&2
+        exit 1
+    fi
+
+    echo "Building IOx Docker image on host with Docker Desktop credentials..."
+    cp "${installer_path_src}" "${installer_path_dst}"
+    docker_build_result=0
+    (
+        cd "${resource_dir}"
+        docker buildx build \
+            --platform "linux/${BUILD_ARCH}" \
+            --build-arg "PKG_FILE=${installer_archive}" \
+            --load \
+            --tag "${docker_image_name}" \
+            .
+    ) || docker_build_result=$?
+    rm -f "${installer_path_dst}"
+    if [[ "${docker_build_result}" -ne 0 ]]; then
+        exit "${docker_build_result}"
+    fi
+
+    docker save \
+        --output "${resource_dir}/${package_name}-docker.tar" \
+        "${docker_image_name}"
+
+    find_docker_socket
+
+    iox_container_script=$(cat <<EOF
+set -euo pipefail
+
+export DOCKER_HOST=unix:///var/run/docker.sock
+
+if [[ ! -f /root/.ioxclientcfg.yaml ]]; then
+    cat >/root/.ioxclientcfg.yaml <<'IOXCLIENTCFG'
+global:
+  version: "1.0"
+  active: default
+  debug: false
+  fogportalprofile:
+    fogpip: ""
+    fogpport: ""
+    fogpapiprefix: ""
+    fogpurlscheme: ""
+  dockerconfig:
+    server_uri: unix:///var/run/docker.sock
+    api_version: "1.22"
+author:
+  name: |2+
+
+  link: ""
+profiles: {default: {host_ip: 127.0.0.1, host_port: 8443, auth_keys: cm9vdDo=, auth_token: "",
+    local_repo: /software/downloads, api_prefix: /iox/api/v2/hosting/, url_scheme: https,
+    ssh_port: 2222, rsa_key: "", certificate: "", cpu_architecture: "", middleware: {
+      mw_ip: "", mw_port: "", mw_baseuri: "", mw_urlscheme: "", mw_access_token: ""},
+    conn_timeout: 1000, client_auth: "no", client_cert: "", client_key: ""}}
+IOXCLIENTCFG
+fi
+
+installer_dir="/build/${BUILD_DIR}/installer/linux"
+resource_dir="\${installer_dir}/${LINUX_DISTRO}"
+package_name="${package_name}"
+docker_image_name="${docker_image_name}"
+iox_package_name="\${package_name}.package"
+work_dir="\$(mktemp -d /tmp/iox-package.XXXXXX)"
+iox_package_path="\${work_dir}/\${iox_package_name}.tar"
+resource_iox_package_path="\${resource_dir}/\${iox_package_name}.tar"
+activation_path="\${resource_dir}/activation.json"
+work_activation_path="\${work_dir}/activation.json"
+bundle_path="\${work_dir}/\${package_name}.bundle.tar"
+resource_bundle_path="\${resource_dir}/\${package_name}.bundle.tar"
+package_path="\${installer_dir}/\${package_name}.tar"
+work_package_path="\${work_dir}/\${package_name}.tar"
+
+trap 'rm -rf "\${work_dir}"' EXIT
+
+if [[ ! -f "\${resource_dir}/package.yaml" ]]; then
+    echo "Cannot package IOx: missing \${resource_dir}/package.yaml" >&2
+    exit 1
+fi
+if [[ ! -f "\${activation_path}" ]]; then
+    echo "Cannot create IOx bundle: missing \${activation_path}" >&2
+    exit 1
+fi
+
+cp "\${resource_dir}/package.yaml" "\${work_dir}/"
+cp "\${activation_path}" "\${work_activation_path}"
+
+echo "Packaging IOx image inside Linux container with ioxclient..."
+ioxclient docker package \
+    --package-type ext2 \
+    --name "\${iox_package_name}" \
+    "\${docker_image_name}" \
+    "\${work_dir}"
+
+if [[ ! -f "\${iox_package_path}" ]]; then
+    echo "ioxclient did not create expected package: \${iox_package_path}" >&2
+    exit 1
+fi
+
+rm -f "\${resource_iox_package_path}" "\${resource_bundle_path}" "\${package_path}"
+
+tmp_bundle_dir="\${work_dir}/bundle"
+mkdir -p "\${tmp_bundle_dir}"
+cp "\${iox_package_path}" "\${tmp_bundle_dir}/"
+cp "\${work_activation_path}" "\${tmp_bundle_dir}/\${package_name}.activation.json"
+tar -cf "\${bundle_path}" -C "\${tmp_bundle_dir}" "\${iox_package_name}.tar" "\${package_name}.activation.json"
+tar -cf "\${work_package_path}" -C "\${work_dir}" "\${package_name}.bundle.tar"
+
+cp "\${iox_package_path}" "\${resource_iox_package_path}"
+cp "\${bundle_path}" "\${resource_bundle_path}"
+cp "\${work_package_path}" "\${package_path}"
+
+echo "Successfully created IOx package: \${package_path}"
+EOF
+)
+
+    docker run \
+        "${base_docker_run_args[@]}" \
+        -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
+        "${image}" \
+        /bin/bash -lc "${iox_container_script}"
+fi
+
+if [[ "${PACKAGE_ON_HOST}" == "true" ]]; then
+    if [[ "${LINUX_DISTRO}" != "meraki" ]]; then
         echo "Skipping host Docker package step for linux_distro=${LINUX_DISTRO}."
         exit 0
     fi

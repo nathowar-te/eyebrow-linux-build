@@ -38,7 +38,7 @@ RUN --mount=from=python_requirements,source=requirements.txt,target=/tmp/require
  . venv/bin/activate && pip install -r /tmp/requirements.txt
 
 # Linux build dependencies
-RUN apt install -y libmnl-dev libdbus-1-dev ccache
+RUN apt install -y libmnl-dev libdbus-1-dev ccache e2fsprogs
 
 # Install Docker CE
 RUN install -m 0755 -d /etc/apt/keyrings && \
