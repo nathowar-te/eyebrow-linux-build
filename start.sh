@@ -18,7 +18,7 @@ Without --profile, opens an interactive shell in the build container.
 
 Configure, compile, and package:
   ./start.sh \
-    --profile linux-alpine322-meraki-arm64-clang21-debug \
+    --profile linux-alpine322-arm64-clang21-debug \
     --build-conan-profile linux-ubuntu2204-arm64-gcc11-release \
     --linux-distro meraki
 
@@ -303,13 +303,22 @@ echo "Using image: ${image}"
 base_docker_run_args=(
     --rm
     --privileged
+    --network=host
     -v "${REPO_ROOT}:/build"
     -v "${HOME}/.conan:/root/.conan"
     -v "${HOME}/.ssh:/root/.ssh"
+    -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+    -e SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
     -v "${LOGDIR}:/var/log"
     -w /build
     --cap-add NET_ADMIN
 )
+
+if [[ -f "${HOME}/.gitconfig" ]]; then
+    base_docker_run_args+=(
+        -v "${HOME}/.gitconfig:/root/.gitconfig:ro"
+    )
+fi
 
 find_docker_socket() {
     DOCKER_SOCKET="${DOCKER_SOCKET:-}"
