@@ -68,7 +68,7 @@ Options:
       Passes -DTE_CONAN_BUILD_PACKAGES=<VALUE>, for example "missing".
 
   --skip-host-package
-      Do not run scripts/docker/package.py after the container build.
+      Do not run scripts/container/package.py after the container build.
       IOx packaging normally runs in the container; Meraki packaging runs on the host.
 
   --no-fresh
@@ -592,7 +592,7 @@ if [[ "${PACKAGE_ON_HOST}" == "true" ]]; then
     echo "Packaging ${LINUX_DISTRO} Docker image on host with ${host_python}..."
     (
         cd "${REPO_ROOT}"
-        "${host_python}" scripts/docker/package.py \
+        "${host_python}" scripts/container/package.py \
             --build_mode "${BUILD_MODE}" \
             --build_product "${BUILD_PRODUCT}" \
             --build_version "${build_version}" \
