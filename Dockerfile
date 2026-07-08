@@ -10,11 +10,13 @@ RUN apt-get update && \
       ca-certificates \
       gnupg2
 
-RUN apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y \
       ninja-build \
       git \
       g++ \
       clang \
+      llvm \
       lld
 
 # Install Kitware’s APT repo to get CMake 3.26+
@@ -39,6 +41,22 @@ RUN --mount=from=python_requirements,source=requirements.txt,target=/tmp/require
 
 # Linux build dependencies
 RUN apt install -y libmnl-dev libdbus-1-dev ccache e2fsprogs
+
+# Optional Windows/MSVC ABI cross-build support. Visual Studio Build Tools are Windows-only,
+# so Linux builds use xwin to acquire the Windows SDK/MSVC headers and libraries, then compile
+# with clang-cl/lld-link.
+ARG INSTALL_WINDOWS_MSVC_TOOLCHAIN=false
+RUN if [ "${INSTALL_WINDOWS_MSVC_TOOLCHAIN}" = "true" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends pkg-config libssl-dev && \
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        sh -s -- -y --profile minimal && \
+      /root/.cargo/bin/cargo install xwin --locked && \
+      cp /root/.cargo/bin/xwin /usr/local/bin/xwin && \
+      grep -v '.cargo/env' /root/.profile > /tmp/root-profile && \
+      mv /tmp/root-profile /root/.profile && \
+      rm -rf /root/.cargo /root/.rustup; \
+    fi
 
 # Install Docker CE
 RUN install -m 0755 -d /etc/apt/keyrings && \

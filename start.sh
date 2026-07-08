@@ -32,8 +32,49 @@ Options:
   --linux-distro DISTRO
       Linux distro passed to configure.py, for example meraki or iox.
 
+  --windows-msvc
+      Configure/build a Windows MSVC-ABI target inside the Linux container using
+      clang-cl/lld-link and xwin. Experimental; compile validation only, not
+      installer/signing.
+
+  --windows-msi
+      Build the x86 MSI on a Windows VM and copy it to build/windows-vm-msi.
+
+  --windows-vm-host HOST
+      Windows VM hostname or address. Required with --windows-msi unless
+      WINDOWS_VM_HOST is set.
+
+  --windows-vm-user USER
+      Windows SSH user. Defaults to Administrator.
+
+  --windows-vm-jump HOST
+      SSH ProxyJump host used to reach the Windows VM.
+
+  --windows-vm-password-env NAME
+      Environment variable containing the Windows SSH password. Defaults to
+      WINDOWS_VM_PASSWORD. Key-based SSH is used when the variable is empty.
+
+  --windows-vm-work-dir PATH
+      Remote Windows work directory. Defaults to C:\Dev\eyebrow-msi-build.
+
+  --windows-vm-bootstrap-tools
+      Install missing Visual Studio Build Tools, Python, .NET, Git, and Node.js
+      on the VM with winget before building.
+
+  --windows-vm-artifactory-tunnel
+      Forward the internal Artifactory HTTPS endpoint through SSH for CML VMs
+      without corporate DNS or direct Artifactory routing.
+
+  --windows-vm-copy-conan-credentials
+      Temporarily copy the local Conan 1 credential database to the VM for the
+      build. The VM database is restored and the uploaded copy is deleted.
+
+  --windows-msi-output-dir DIR
+      Local output directory. Defaults to build/windows-vm-msi.
+
   --build-dir DIR
-      Build directory inside the repo mount. Defaults to build/<linux-distro>.
+      Build directory inside the repo mount. Defaults to build/<linux-distro>,
+      or build/windows-msvc with --windows-msvc.
 
   --build-mode MODE
       Build mode passed to configure.py. Defaults to DEV.
@@ -85,6 +126,17 @@ REPO_ROOT="$( cd "${DIR}/../" && pwd )"
 TARGET_CONAN_PROFILE=""
 BUILD_CONAN_PROFILE=""
 LINUX_DISTRO=""
+WINDOWS_MSVC="false"
+WINDOWS_MSI="false"
+WINDOWS_VM_HOST="${WINDOWS_VM_HOST:-}"
+WINDOWS_VM_USER="Administrator"
+WINDOWS_VM_JUMP=""
+WINDOWS_VM_PASSWORD_ENV="WINDOWS_VM_PASSWORD"
+WINDOWS_VM_WORK_DIR='C:\Dev\eyebrow-msi-build'
+WINDOWS_VM_BOOTSTRAP_TOOLS="false"
+WINDOWS_VM_ARTIFACTORY_TUNNEL="false"
+WINDOWS_VM_COPY_CONAN_CREDENTIALS="false"
+WINDOWS_MSI_OUTPUT_DIR=""
 BUILD_DIR=""
 BUILD_MODE="DEV"
 BUILD_PRODUCT="ENTERPRISE"
@@ -111,6 +163,51 @@ while [[ $# -gt 0 ]]; do
             ;;
         --linux-distro|--linux_distro)
             LINUX_DISTRO="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-msvc|--windows_msvc)
+            WINDOWS_MSVC="true"
+            shift
+            ;;
+        --windows-msi|--windows_msi)
+            WINDOWS_MSVC="true"
+            WINDOWS_MSI="true"
+            shift
+            ;;
+        --windows-vm-host|--windows_vm_host)
+            WINDOWS_VM_HOST="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-vm-user|--windows_vm_user)
+            WINDOWS_VM_USER="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-vm-jump|--windows_vm_jump)
+            WINDOWS_VM_JUMP="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-vm-password-env|--windows_vm_password_env)
+            WINDOWS_VM_PASSWORD_ENV="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-vm-work-dir|--windows_vm_work_dir)
+            WINDOWS_VM_WORK_DIR="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-vm-bootstrap-tools|--windows_vm_bootstrap_tools)
+            WINDOWS_VM_BOOTSTRAP_TOOLS="true"
+            shift
+            ;;
+        --windows-vm-artifactory-tunnel|--windows_vm_artifactory_tunnel)
+            WINDOWS_VM_ARTIFACTORY_TUNNEL="true"
+            shift
+            ;;
+        --windows-vm-copy-conan-credentials|--windows_vm_copy_conan_credentials)
+            WINDOWS_VM_COPY_CONAN_CREDENTIALS="true"
+            shift
+            ;;
+        --windows-msi-output-dir|--windows_msi_output_dir)
+            WINDOWS_MSI_OUTPUT_DIR="${2:?Missing value for $1}"
             shift 2
             ;;
         --build-dir|--build_dir)
@@ -177,7 +274,55 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${TARGET_CONAN_PROFILE}" && -z "${BUILD_CONAN_PROFILE}" && -z "${LINUX_DISTRO}" ]]; then
+if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+    RUN_MODE="build"
+    if [[ -z "${TARGET_CONAN_PROFILE}" || -z "${BUILD_CONAN_PROFILE}" ]]; then
+        echo "Windows MSVC mode requires --profile and --build-conan-profile." >&2
+        usage >&2
+        exit 2
+    fi
+    if [[ -n "${LINUX_DISTRO}" ]]; then
+        echo "Windows MSVC mode does not use --linux-distro." >&2
+        usage >&2
+        exit 2
+    fi
+    if [[ "${WINDOWS_MSI}" == "true" ]]; then
+        if [[ -z "${WINDOWS_VM_HOST}" ]]; then
+            echo "--windows-msi requires --windows-vm-host or WINDOWS_VM_HOST." >&2
+            exit 2
+        fi
+
+        windows_msi_args=(
+            --repo-root "${REPO_ROOT}"
+            --vm-host "${WINDOWS_VM_HOST}"
+            --vm-user "${WINDOWS_VM_USER}"
+            --vm-password-env "${WINDOWS_VM_PASSWORD_ENV}"
+            --vm-work-dir "${WINDOWS_VM_WORK_DIR}"
+            --target-conan-profile "${TARGET_CONAN_PROFILE}"
+            --build-conan-profile "${BUILD_CONAN_PROFILE}"
+            --build-mode "${BUILD_MODE}"
+            --build-product "${BUILD_PRODUCT}"
+            --concurrency "${CONCURRENCY}"
+        )
+        if [[ -n "${WINDOWS_VM_JUMP}" ]]; then
+            windows_msi_args+=(--vm-jump "${WINDOWS_VM_JUMP}")
+        fi
+        if [[ -n "${WINDOWS_MSI_OUTPUT_DIR}" ]]; then
+            windows_msi_args+=(--output-dir "${WINDOWS_MSI_OUTPUT_DIR}")
+        fi
+        if [[ "${WINDOWS_VM_BOOTSTRAP_TOOLS}" == "true" ]]; then
+            windows_msi_args+=(--bootstrap-tools)
+        fi
+        if [[ "${WINDOWS_VM_ARTIFACTORY_TUNNEL}" == "true" ]]; then
+            windows_msi_args+=(--artifactory-tunnel)
+        fi
+        if [[ "${WINDOWS_VM_COPY_CONAN_CREDENTIALS}" == "true" ]]; then
+            windows_msi_args+=(--copy-conan-credentials)
+        fi
+
+        exec "${DIR}/windows/build-msi-vm.sh" "${windows_msi_args[@]}"
+    fi
+elif [[ -z "${TARGET_CONAN_PROFILE}" && -z "${BUILD_CONAN_PROFILE}" && -z "${LINUX_DISTRO}" ]]; then
     RUN_MODE="shell"
 else
     RUN_MODE="build"
@@ -189,7 +334,11 @@ else
 fi
 
 if [[ -z "${BUILD_DIR}" ]]; then
-    BUILD_DIR="build/${LINUX_DISTRO:-linux}"
+    if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+        BUILD_DIR="build/windows-msvc"
+    else
+        BUILD_DIR="build/${LINUX_DISTRO:-linux}"
+    fi
 fi
 
 if [[ "${#BUILD_TARGETS[@]}" -eq 0 ]]; then
@@ -224,7 +373,7 @@ if [[ -z "${BUILD_ARCH}" ]]; then
     esac
 fi
 
-if [[ "${BUILD_ARCH}" != "arm64" && "${BUILD_ARCH}" != "amd64" ]]; then
+if [[ "${WINDOWS_MSVC}" != "true" && "${BUILD_ARCH}" != "arm64" && "${BUILD_ARCH}" != "amd64" ]]; then
     echo "--build-arch must be arm64 or amd64, got: ${BUILD_ARCH}" >&2
     exit 2
 fi
@@ -286,6 +435,31 @@ mkdir -p "${LOGDIR}"
 requirements_context="$(mktemp -d "${TMPDIR:-/tmp}/eyebrow-linux-build-requirements.XXXXXX")"
 cp "${REPO_ROOT}/scripts/requirements.txt" "${requirements_context}/requirements.txt"
 
+container_repo_root="${REPO_ROOT}"
+if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+    windows_source_archive="${requirements_context}/eyebrow-source.tar.gz"
+    windows_source_directory="${requirements_context}/eyebrow-source"
+    mkdir -p "${windows_source_directory}" "${REPO_ROOT}/${BUILD_DIR}"
+
+    echo "Staging an isolated Windows build source tree..."
+    COPYFILE_DISABLE=1 tar -czf "${windows_source_archive}" \
+        --exclude './.git' \
+        --exclude './.cache' \
+        --exclude './.mypy_cache' \
+        --exclude './.nox' \
+        --exclude './.ruff_cache' \
+        --exclude './.venv' \
+        --exclude './build' \
+        --exclude './build-*' \
+        --exclude './e2e' \
+        --exclude './eyebrow-linux-build' \
+        -C "${REPO_ROOT}" .
+    tar -xzf "${windows_source_archive}" -C "${windows_source_directory}"
+    patch -d "${windows_source_directory}" -p1 \
+        < "${DIR}/windows/patches/eyebrow-windows-build.patch"
+    container_repo_root="${windows_source_directory}"
+fi
+
 # Build the image. Use an iidfile instead of quiet stdout capture so Docker's
 # progress output remains visible while still giving us the image ID afterward.
 iidfile="$(mktemp "${TMPDIR:-/tmp}/eyebrow-linux-build-image.XXXXXX")"
@@ -293,6 +467,7 @@ trap 'rm -f "${iidfile}"; rm -rf "${requirements_context}"' EXIT
 docker build \
     --network=host \
     --allow network.host \
+    --build-arg "INSTALL_WINDOWS_MSVC_TOOLCHAIN=${WINDOWS_MSVC}" \
     --build-context python_requirements="${requirements_context}" \
     --iidfile "${iidfile}" \
     "${DIR}"
@@ -304,7 +479,7 @@ base_docker_run_args=(
     --rm
     --privileged
     --network=host
-    -v "${REPO_ROOT}:/build"
+    -v "${container_repo_root}:/build"
     -v "${HOME}/.conan:/root/.conan"
     -v "${HOME}/.ssh:/root/.ssh"
     -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
@@ -317,6 +492,17 @@ base_docker_run_args=(
 if [[ -f "${HOME}/.gitconfig" ]]; then
     base_docker_run_args+=(
         -v "${HOME}/.gitconfig:/root/.gitconfig:ro"
+    )
+fi
+
+if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+    xwin_toolchain_dir="${REPO_ROOT}/.cache/xwin"
+    xwin_cache_dir="${HOME}/.cache/xwin"
+    mkdir -p "${xwin_toolchain_dir}" "${xwin_cache_dir}"
+    base_docker_run_args+=(
+        -v "${REPO_ROOT}/${BUILD_DIR}:/build/${BUILD_DIR}"
+        -v "${xwin_toolchain_dir}:/opt/xwin"
+        -v "${xwin_cache_dir}:/root/.cache/xwin"
     )
 fi
 
@@ -342,10 +528,36 @@ if [[ "${RUN_MODE}" == "shell" ]]; then
     exit 0
 fi
 
+WINDOWS_ARCH=""
+VSCMD_ARCH=""
+CLANG_TARGET=""
+if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+    case "${TARGET_CONAN_PROFILE}" in
+        windows-x86-*)
+            WINDOWS_ARCH="x86"
+            VSCMD_ARCH="x86"
+            CLANG_TARGET="i686-pc-windows-msvc"
+            ;;
+        windows-x64-*|windows-x86_64-*)
+            WINDOWS_ARCH="x86_64"
+            VSCMD_ARCH="x64"
+            CLANG_TARGET="x86_64-pc-windows-msvc"
+            ;;
+        *)
+            echo "Unsupported Windows MSVC target profile: ${TARGET_CONAN_PROFILE}" >&2
+            exit 2
+            ;;
+    esac
+fi
+
+container_build_targets_literal="$(printf "%q " "${container_build_targets[@]}")"
+
 container_script=$(cat <<EOF
 set -euo pipefail
 
 source /venv/bin/activate
+
+cmake_build_targets=(${container_build_targets_literal})
 
 configure_args=(
     --build_dir "${BUILD_DIR}"
@@ -353,8 +565,63 @@ configure_args=(
     --build_product "${BUILD_PRODUCT}"
     --profile "${TARGET_CONAN_PROFILE}"
     --build_conan_profile "${BUILD_CONAN_PROFILE}"
-    --linux_distro "${LINUX_DISTRO}"
 )
+
+if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+    if [[ ! -f /opt/xwin/sdk/lib/um/${WINDOWS_ARCH}/kernel32.lib ||
+          ! -f /opt/xwin/crt/lib/${WINDOWS_ARCH}/msvcrt.lib ||
+          ! -f /opt/xwin/crt/lib/${WINDOWS_ARCH}/msvcrtd.lib ||
+          ! -f /opt/xwin/crt/include/atlbase.h ||
+          ! -f /opt/xwin/crt/include/atlsecurity.h ]]; then
+        rm -rf /opt/xwin/crt /opt/xwin/sdk
+        xwin --accept-license --cache-dir /root/.cache/xwin --arch "${WINDOWS_ARCH}" --include-debug-runtime --include-atl splat --include-debug-libs --copy --output /opt/xwin
+    fi
+
+    windows_linker_flags="/libpath:/opt/xwin/crt/lib/${WINDOWS_ARCH} /libpath:/opt/xwin/sdk/lib/ucrt/${WINDOWS_ARCH} /libpath:/opt/xwin/sdk/lib/um/${WINDOWS_ARCH}"
+
+    export PATH="/opt/te/llvm-21/bin:\${PATH}"
+    export VSCMD_ARG_TGT_ARCH="${VSCMD_ARCH}"
+    export CC=/opt/te/llvm-21/bin/clang-cl
+    export CXX=/opt/te/llvm-21/bin/clang-cl
+    xwin_include_flags="-imsvc/opt/xwin/crt/include -imsvc/opt/xwin/sdk/include/ucrt -imsvc/opt/xwin/sdk/include/um -imsvc/opt/xwin/sdk/include/shared -imsvc/opt/xwin/sdk/include/winrt -imsvc/opt/xwin/sdk/include/cppwinrt"
+    xwin_rc_include_flags="-I/opt/xwin/crt/include -I/opt/xwin/sdk/include/ucrt -I/opt/xwin/sdk/include/um -I/opt/xwin/sdk/include/shared"
+    clang_cl_warning_flags="-Wno-unused-command-line-argument -Wno-c++98-compat -Wno-c++98-compat-pedantic -Wno-padded -Wno-unique-object-duplication -Wno-exit-time-destructors -Wno-nrvo -Wno-sign-conversion -Wno-missing-prototypes -Wno-covered-switch-default -Wno-switch-default -Wno-switch-enum -Wno-documentation -Wno-documentation-unknown-command -Wno-gnu-zero-variadic-macro-arguments -Wno-unsafe-buffer-usage -Wno-thread-safety-analysis -Wno-thread-safety-attributes -Wno-unqualified-std-cast-call -Wno-global-constructors -Wno-unused-template -Wno-reserved-identifier -Wno-invalid-offsetof -Wno-ctad-maybe-unsupported -Wno-implicit-int-conversion -Wno-shadow -Wno-shadow-uncaptured-local -Wno-deprecated-copy-with-user-provided-dtor -Wno-missing-include-dirs -Wno-unreachable-code-return -Wno-implicit-int-float-conversion -Wno-zero-as-null-pointer-constant -Wno-unreachable-code-break -Wno-missing-field-initializers -Wno-inconsistent-missing-destructor-override -Wno-suggest-destructor-override -Wno-suggest-override -Wno-missing-noreturn -Wno-cast-function-type-strict -Wno-tautological-type-limit-compare -Wno-extra-semi-stmt -Wno-old-style-cast -Wno-conditional-uninitialized -Wno-nonportable-system-include-path -Wno-disabled-macro-expansion"
+    export CFLAGS="--target=${CLANG_TARGET} \${clang_cl_warning_flags} \${xwin_include_flags}"
+    export CXXFLAGS="--target=${CLANG_TARGET} \${clang_cl_warning_flags} \${xwin_include_flags}"
+    export LDFLAGS="\${windows_linker_flags}"
+    export INCLUDE="/opt/xwin/crt/include:/opt/xwin/sdk/include/ucrt:/opt/xwin/sdk/include/um:/opt/xwin/sdk/include/shared:/opt/xwin/sdk/include/winrt:/opt/xwin/sdk/include/cppwinrt"
+    export LIB="/opt/xwin/crt/lib/${WINDOWS_ARCH}:/opt/xwin/sdk/lib/ucrt/${WINDOWS_ARCH}:/opt/xwin/sdk/lib/um/${WINDOWS_ARCH}"
+    export LIBPATH="\${LIB}"
+    export CONAN_CMAKE_GENERATOR=Ninja
+
+    configure_args+=(
+        --generator "Ninja Multi-Config"
+        --cmake_add_define TE_COMPILER_TARGET "${CLANG_TARGET}"
+        --cmake_add_define CMAKE_SYSTEM_NAME Windows
+        --cmake_add_define CMAKE_SYSTEM_PROCESSOR "${WINDOWS_ARCH}"
+        --cmake_add_define CMAKE_C_COMPILER_TARGET "${CLANG_TARGET}"
+        --cmake_add_define CMAKE_CXX_COMPILER_TARGET "${CLANG_TARGET}"
+        --cmake_add_define CMAKE_C_COMPILER /opt/te/llvm-21/bin/clang-cl
+        --cmake_add_define CMAKE_CXX_COMPILER /opt/te/llvm-21/bin/clang-cl
+        --cmake_add_define CMAKE_RC_COMPILER /opt/te/llvm-21/bin/llvm-rc
+        --cmake_add_define CMAKE_RC_FLAGS "\${xwin_rc_include_flags}"
+        --cmake_add_define CMAKE_MT /usr/bin/llvm-mt
+        --cmake_add_define CMAKE_LINKER /opt/te/llvm-21/bin/lld-link
+        --cmake_add_define CMAKE_AR /opt/te/llvm-21/bin/llvm-lib
+        --cmake_add_define CMAKE_TRY_COMPILE_CONFIGURATION Release
+        --cmake_add_define CMAKE_COMPILE_WARNING_AS_ERROR FALSE
+        --cmake_add_define CONAN_DISABLE_CHECK_COMPILER 1
+        --cmake_add_define USE_PCH OFF
+        --cmake_add_define CMAKE_EXE_LINKER_FLAGS "\${windows_linker_flags}"
+        --cmake_add_define CMAKE_SHARED_LINKER_FLAGS "\${windows_linker_flags}"
+        --cmake_add_define CMAKE_MODULE_LINKER_FLAGS "\${windows_linker_flags}"
+    )
+    configure_args+=(
+        --cmake_add_define TE_SKIP_INSTALLER ON
+    )
+else
+    configure_args+=(--linux_distro "${LINUX_DISTRO}")
+fi
 
 if [[ "${FRESH}" == "true" ]]; then
     configure_args+=(--fresh)
@@ -369,7 +636,23 @@ if [[ "${COVERAGE}" == "true" ]]; then
 fi
 
 ./scripts/configure.py "\${configure_args[@]}"
-cmake --build "${BUILD_DIR}" --parallel "${CONCURRENCY}" --target $(printf "%q " "${container_build_targets[@]}")
+
+build_cmake_targets() {
+    if [[ "\$#" -eq 0 ]]; then
+        return
+    fi
+    cmake_build_args=(
+        --build "${BUILD_DIR}"
+        --parallel "${CONCURRENCY}"
+    )
+    if [[ "${WINDOWS_MSVC}" == "true" ]]; then
+        cmake_build_args+=(--config "${TEST_BUILD_CONFIG}")
+    fi
+    cmake_build_args+=(--target "\$@")
+    cmake "\${cmake_build_args[@]}"
+}
+
+build_cmake_targets "\${cmake_build_targets[@]}"
 
 if [[ "${RUN_TESTS}" == "true" ]]; then
     test_args=(

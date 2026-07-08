@@ -1,0 +1,52 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f33c1f31cd..5ae8ad417c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -277,4 +277,7 @@ set(CMAKE_WIN32_EXECUTABLE OFF)
+ add_subdirectory(libraries)
+ add_subdirectory(programs)
+ add_subdirectory(plugins)
+-add_subdirectory(installer)
++option(TE_SKIP_INSTALLER "Skip installer targets" OFF)
++if(NOT TE_SKIP_INSTALLER)
++    add_subdirectory(installer)
++endif()
+diff --git a/cmake/InstallConanDependencies.cmake b/cmake/InstallConanDependencies.cmake
+index e16cda4c47..b57a2896ba 100644
+--- a/cmake/InstallConanDependencies.cmake
++++ b/cmake/InstallConanDependencies.cmake
+@@ -167,0 +168,11 @@
++if(WIN32 AND NOT Crashpad_HANDLER_EXECUTABLE AND DEFINED CONAN_BIN_DIRS_CRASHPAD)
++    foreach(_crashpad_bin_dir IN LISTS CONAN_BIN_DIRS_CRASHPAD)
++        if(EXISTS "${_crashpad_bin_dir}/crashpad_handler.exe")
++            set(Crashpad_HANDLER_EXECUTABLE "${_crashpad_bin_dir}/crashpad_handler.exe"
++                CACHE FILEPATH "Path to the Crashpad handler executable"
++            )
++            break()
++        endif()
++    endforeach()
++endif()
++
+diff --git a/conan/recipes/te-assurance-library/conanfile.py b/conan/recipes/te-assurance-library/conanfile.py
+index 3fca7119cf..6dc52302e3 100644
+--- a/conan/recipes/te-assurance-library/conanfile.py
++++ b/conan/recipes/te-assurance-library/conanfile.py
+@@ -70,0 +71,4 @@
++        tools.patch(
++            base_path=os.path.join(self.source_folder, self._source_subfolder),
++            patch_file="patches/0002-Avoid-constexpr-WSAPoll-alias.patch",
++        )
+diff --git a/conan/recipes/te-assurance-library/patches/0002-Avoid-constexpr-WSAPoll-alias.patch b/conan/recipes/te-assurance-library/patches/0002-Avoid-constexpr-WSAPoll-alias.patch
+new file mode 100644
+index 0000000000..566d056339
+--- /dev/null
++++ b/conan/recipes/te-assurance-library/patches/0002-Avoid-constexpr-WSAPoll-alias.patch
+@@ -0,0 +1,8 @@
++--- a/src/dns/internal/my_poll.h
+++++ b/src/dns/internal/my_poll.h
++@@ -8 +8,4 @@
++-static constexpr auto poll = WSAPoll;
+++inline INT poll(LPWSAPOLLFD fdArray, ULONG fds, INT timeout)
+++{
+++    return WSAPoll(fdArray, fds, timeout);
+++}
