@@ -22,6 +22,9 @@ Configure, compile, and package:
     --build-conan-profile linux-ubuntu2204-arm64-gcc11-release \
     --linux-distro meraki
 
+Build an x86 Windows installer on a CML VM:
+  ./start.sh --windows-msi-vm 192.168.255.219
+
 Options:
   --profile, --target-conan-profile PROFILE
       Conan target/host profile for the artifact being built.
@@ -39,6 +42,12 @@ Options:
 
   --windows-msi
       Build the x86 MSI on a Windows VM and copy it to build/windows-vm-msi.
+
+  --windows-msi-vm HOST
+      Run the complete CML VM installer workflow with one argument. Defaults the
+      Windows and build profiles, jump host, tool bootstrapping, Artifactory
+      tunnel, and Conan credential transfer. Prompts for the VM password when
+      WINDOWS_VM_PASSWORD is unset.
 
   --windows-vm-host HOST
       Windows VM hostname or address. Required with --windows-msi unless
@@ -128,9 +137,10 @@ BUILD_CONAN_PROFILE=""
 LINUX_DISTRO=""
 WINDOWS_MSVC="false"
 WINDOWS_MSI="false"
+WINDOWS_MSI_VM_DEFAULTS="false"
 WINDOWS_VM_HOST="${WINDOWS_VM_HOST:-}"
-WINDOWS_VM_USER="Administrator"
-WINDOWS_VM_JUMP=""
+WINDOWS_VM_USER="${WINDOWS_VM_USER:-Administrator}"
+WINDOWS_VM_JUMP="${WINDOWS_VM_JUMP:-}"
 WINDOWS_VM_PASSWORD_ENV="WINDOWS_VM_PASSWORD"
 WINDOWS_VM_WORK_DIR='C:\Dev\eyebrow-msi-build'
 WINDOWS_VM_BOOTSTRAP_TOOLS="false"
@@ -173,6 +183,13 @@ while [[ $# -gt 0 ]]; do
             WINDOWS_MSVC="true"
             WINDOWS_MSI="true"
             shift
+            ;;
+        --windows-msi-vm|--windows_msi_vm)
+            WINDOWS_MSVC="true"
+            WINDOWS_MSI="true"
+            WINDOWS_MSI_VM_DEFAULTS="true"
+            WINDOWS_VM_HOST="${2:?Missing value for $1}"
+            shift 2
             ;;
         --windows-vm-host|--windows_vm_host)
             WINDOWS_VM_HOST="${2:?Missing value for $1}"
@@ -273,6 +290,33 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "${WINDOWS_MSI_VM_DEFAULTS}" == "true" ]]; then
+    TARGET_CONAN_PROFILE="${TARGET_CONAN_PROFILE:-windows-x86-msvc17-release}"
+    BUILD_CONAN_PROFILE="${BUILD_CONAN_PROFILE:-linux-ubuntu2204-arm64-gcc11-release}"
+    WINDOWS_VM_JUMP="${WINDOWS_VM_JUMP:-macos_e2e_lab_jump}"
+    WINDOWS_VM_BOOTSTRAP_TOOLS="true"
+    WINDOWS_VM_ARTIFACTORY_TUNNEL="true"
+    WINDOWS_VM_COPY_CONAN_CREDENTIALS="true"
+
+    if [[ -z "${!WINDOWS_VM_PASSWORD_ENV:-}" ]]; then
+        if [[ ! -r /dev/tty ]]; then
+            echo "Set ${WINDOWS_VM_PASSWORD_ENV} when running without a terminal." >&2
+            exit 2
+        fi
+
+        read -r -s -p "Password for ${WINDOWS_VM_USER}@${WINDOWS_VM_HOST}: " windows_vm_password \
+            < /dev/tty
+        printf '\n' > /dev/tty
+        if [[ -z "${windows_vm_password}" ]]; then
+            echo "The Windows VM password must not be empty." >&2
+            exit 2
+        fi
+        printf -v "${WINDOWS_VM_PASSWORD_ENV}" '%s' "${windows_vm_password}"
+        export "${WINDOWS_VM_PASSWORD_ENV?}"
+        unset windows_vm_password
+    fi
+fi
 
 if [[ "${WINDOWS_MSVC}" == "true" ]]; then
     RUN_MODE="build"
