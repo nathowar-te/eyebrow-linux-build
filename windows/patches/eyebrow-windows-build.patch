@@ -11,6 +11,22 @@ index f33c1f31cd..5ae8ad417c 100644
 +if(NOT TE_SKIP_INSTALLER)
 +    add_subdirectory(installer)
 +endif()
+diff --git a/cmake/branding.cmake b/cmake/branding.cmake
+--- a/cmake/branding.cmake
++++ b/cmake/branding.cmake
+@@ -158,0 +159,5 @@
++if(TE_SKIP_WINDOWS_MIDL_TOOLS)
++    set(TE_BUILD_PROJECT_IEEXT OFF)
++    set(TE_BUILD_PROJECT_NOTIFIER OFF)
++endif()
++
+diff --git a/plugins/ie/CMakeLists.txt b/plugins/ie/CMakeLists.txt
+--- a/plugins/ie/CMakeLists.txt
++++ b/plugins/ie/CMakeLists.txt
+@@ -2,0 +3 @@
++if(NOT TE_SKIP_WINDOWS_MIDL_TOOLS)
+@@ -14,0 +16 @@
++endif()
 diff --git a/cmake/InstallConanDependencies.cmake b/cmake/InstallConanDependencies.cmake
 index e16cda4c47..b57a2896ba 100644
 --- a/cmake/InstallConanDependencies.cmake
@@ -50,3 +66,72 @@ index 0000000000..566d056339
 ++{
 ++    return WSAPoll(fdArray, fds, timeout);
 ++}
+diff --git a/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h b/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
+--- a/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
++++ b/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
+@@ -12,3 +12,9 @@
+-template <typename Provider, auto closeFunction>
+-using ProviderUniqueHFile =
+-    ProviderUniqueResource<HANDLE, Provider, closeFunction, INVALID_HANDLE_VALUE>;
++#if defined(__clang__)
++// Clang does not permit INVALID_HANDLE_VALUE as a pointer-valued non-type template argument.
++template <typename Provider, auto closeFunction>
++using ProviderUniqueHFile = ProviderUniqueHandle<Provider, closeFunction>;
++#else
++template <typename Provider, auto closeFunction>
++using ProviderUniqueHFile =
++    ProviderUniqueResource<HANDLE, Provider, closeFunction, INVALID_HANDLE_VALUE>;
++#endif
+diff --git a/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp b/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
+--- a/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
++++ b/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
+@@ -389,15 +389,14 @@
+-        WinSystemMetricsProvider::uniqueHandle hBattery{
+-            provider_->createFileW(devicePath.c_str(),
+-                                   GENERIC_READ | GENERIC_WRITE,
+-                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
+-                                   nullptr,
+-                                   OPEN_EXISTING,
+-                                   FILE_ATTRIBUTE_NORMAL,
+-                                   nullptr),
+-            provider_};
+-
+-        if (!hBattery.isValid()) {
+-            result.batteryProfiles.emplace_back(
+-                makeErrorBatteryProfile(::GetLastError(), "CreateFile for battery device"));
+-            continue;
+-        }
++        const HANDLE batteryHandle = provider_->createFileW(devicePath.c_str(),
++                                                            GENERIC_READ | GENERIC_WRITE,
++                                                            FILE_SHARE_READ | FILE_SHARE_WRITE,
++                                                            nullptr,
++                                                            OPEN_EXISTING,
++                                                            FILE_ATTRIBUTE_NORMAL,
++                                                            nullptr);
++        if (batteryHandle == INVALID_HANDLE_VALUE) {
++            result.batteryProfiles.emplace_back(
++                makeErrorBatteryProfile(::GetLastError(), "CreateFile for battery device"));
++            continue;
++        }
++
++        WinSystemMetricsProvider::uniqueHandle hBattery{batteryHandle, provider_};
+diff --git a/programs/agent/src/win/platform.cmake b/programs/agent/src/win/platform.cmake
+--- a/programs/agent/src/win/platform.cmake
++++ b/programs/agent/src/win/platform.cmake
+@@ -37,3 +37,5 @@
++if(NOT TE_SKIP_WINDOWS_MIDL_TOOLS)
+ add_subdirectory(
+     src/win/tools
+ )
++endif()
+diff --git a/programs/updater/src/win/DefaultDownloadManager.h b/programs/updater/src/win/DefaultDownloadManager.h
+--- a/programs/updater/src/win/DefaultDownloadManager.h
++++ b/programs/updater/src/win/DefaultDownloadManager.h
+@@ -46,0 +47 @@
++    ~DefaultDownloadManager() override;
+diff --git a/programs/updater/src/win/DefaultDownloadManager.cpp b/programs/updater/src/win/DefaultDownloadManager.cpp
+--- a/programs/updater/src/win/DefaultDownloadManager.cpp
++++ b/programs/updater/src/win/DefaultDownloadManager.cpp
+@@ -140,0 +141,2 @@
++DefaultDownloadManager::~DefaultDownloadManager() = default;
++

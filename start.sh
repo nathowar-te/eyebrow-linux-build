@@ -22,6 +22,15 @@ Configure, compile, and package:
     --build-conan-profile linux-ubuntu2204-arm64-gcc11-release \
     --linux-distro meraki
 
+Build an x86 Windows installer locally:
+  ./start.sh \
+    --profile windows-x86-msvc17-release \
+    --build-conan-profile linux-ubuntu2204-arm64-gcc11-release \
+    --windows-msi
+
+Compile locally and run the x86 Windows tests on a CML VM:
+  ./start.sh --windows-tests-vm 192.168.255.219
+
 Build an x86 Windows installer on a CML VM:
   ./start.sh --windows-msi-vm 192.168.255.219
 
@@ -37,11 +46,17 @@ Options:
 
   --windows-msvc
       Configure/build a Windows MSVC-ABI target inside the Linux container using
-      clang-cl/lld-link and xwin. Experimental; compile validation only, not
-      installer/signing.
+      clang-cl/lld-link and xwin. Use --windows-tests-vm to execute tests.
+
+  --windows-tests-vm HOST
+      Compile all Windows test targets locally, then copy and execute them on a
+      Windows VM. Defaults the Windows profiles and jump host and prompts for
+      the VM password when WINDOWS_VM_PASSWORD is unset. JUnit results are
+      copied to <build-dir>/windows-test-results.
 
   --windows-msi
-      Build the x86 MSI on a Windows VM and copy it to build/windows-vm-msi.
+      Build an unsigned x86 MSI locally. Compiles with clang-cl/xwin, then runs
+      WiX 5 under Wine through QEMU in a native Linux packaging container.
 
   --windows-msi-vm HOST
       Run the complete CML VM installer workflow with one argument. Defaults the
@@ -50,8 +65,7 @@ Options:
       WINDOWS_VM_PASSWORD is unset.
 
   --windows-vm-host HOST
-      Windows VM hostname or address. Required with --windows-msi unless
-      WINDOWS_VM_HOST is set.
+      Windows VM hostname or address used by the VM packaging workflow.
 
   --windows-vm-user USER
       Windows SSH user. Defaults to Administrator.
@@ -79,7 +93,7 @@ Options:
       build. The VM database is restored and the uploaded copy is deleted.
 
   --windows-msi-output-dir DIR
-      Local output directory. Defaults to build/windows-vm-msi.
+      VM build output directory. Defaults to build/windows-vm-msi.
 
   --build-dir DIR
       Build directory inside the repo mount. Defaults to build/<linux-distro>,
@@ -99,7 +113,7 @@ Options:
       For IOx/Meraki Docker packaging, package is built automatically as well.
 
   --run-tests
-      Build the tests target and run unit tests with scripts/test.py inside the container.
+      Build and run unit tests. Windows tests require --windows-tests-vm.
 
   --test-timeout SECONDS
       Per-test timeout passed to scripts/test.py. Defaults to 600.
@@ -136,8 +150,11 @@ TARGET_CONAN_PROFILE=""
 BUILD_CONAN_PROFILE=""
 LINUX_DISTRO=""
 WINDOWS_MSVC="false"
-WINDOWS_MSI="false"
+WINDOWS_MSI_LOCAL="false"
+WINDOWS_MSI_VM="false"
 WINDOWS_MSI_VM_DEFAULTS="false"
+WINDOWS_TESTS_VM="false"
+WINDOWS_TESTS_VM_DEFAULTS="false"
 WINDOWS_VM_HOST="${WINDOWS_VM_HOST:-}"
 WINDOWS_VM_USER="${WINDOWS_VM_USER:-Administrator}"
 WINDOWS_VM_JUMP="${WINDOWS_VM_JUMP:-}"
@@ -181,13 +198,21 @@ while [[ $# -gt 0 ]]; do
             ;;
         --windows-msi|--windows_msi)
             WINDOWS_MSVC="true"
-            WINDOWS_MSI="true"
+            WINDOWS_MSI_LOCAL="true"
             shift
             ;;
         --windows-msi-vm|--windows_msi_vm)
             WINDOWS_MSVC="true"
-            WINDOWS_MSI="true"
+            WINDOWS_MSI_VM="true"
             WINDOWS_MSI_VM_DEFAULTS="true"
+            WINDOWS_VM_HOST="${2:?Missing value for $1}"
+            shift 2
+            ;;
+        --windows-tests-vm|--windows_tests_vm)
+            WINDOWS_MSVC="true"
+            WINDOWS_TESTS_VM="true"
+            WINDOWS_TESTS_VM_DEFAULTS="true"
+            RUN_TESTS="true"
             WINDOWS_VM_HOST="${2:?Missing value for $1}"
             shift 2
             ;;
@@ -291,7 +316,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${WINDOWS_MSI_VM_DEFAULTS}" == "true" ]]; then
+if [[ "${WINDOWS_MSI_VM_DEFAULTS}" == "true" || "${WINDOWS_TESTS_VM_DEFAULTS}" == "true" ]]; then
     TARGET_CONAN_PROFILE="${TARGET_CONAN_PROFILE:-windows-x86-msvc17-release}"
     BUILD_CONAN_PROFILE="${BUILD_CONAN_PROFILE:-linux-ubuntu2204-arm64-gcc11-release}"
     WINDOWS_VM_JUMP="${WINDOWS_VM_JUMP:-macos_e2e_lab_jump}"
@@ -330,9 +355,17 @@ if [[ "${WINDOWS_MSVC}" == "true" ]]; then
         usage >&2
         exit 2
     fi
-    if [[ "${WINDOWS_MSI}" == "true" ]]; then
+    if [[ "${RUN_TESTS}" == "true" && "${WINDOWS_TESTS_VM}" != "true" ]]; then
+        echo "Windows test execution requires --windows-tests-vm HOST." >&2
+        exit 2
+    fi
+    if [[ "${WINDOWS_MSI_LOCAL}" == "true" && "${TARGET_CONAN_PROFILE}" != windows-x86-*-release ]]; then
+        echo "Local Windows MSI packaging currently requires an x86 release profile." >&2
+        exit 2
+    fi
+    if [[ "${WINDOWS_MSI_VM}" == "true" ]]; then
         if [[ -z "${WINDOWS_VM_HOST}" ]]; then
-            echo "--windows-msi requires --windows-vm-host or WINDOWS_VM_HOST." >&2
+            echo "The Windows VM workflow requires a VM host." >&2
             exit 2
         fi
 
@@ -386,7 +419,11 @@ if [[ -z "${BUILD_DIR}" ]]; then
 fi
 
 if [[ "${#BUILD_TARGETS[@]}" -eq 0 ]]; then
-    BUILD_TARGETS=(all)
+    if [[ "${WINDOWS_TESTS_VM}" == "true" ]]; then
+        BUILD_TARGETS=(tests)
+    else
+        BUILD_TARGETS=(all)
+    fi
 fi
 
 if [[ -z "${TEST_BUILD_CONFIG}" ]]; then
@@ -444,6 +481,23 @@ if [[ "${DOCKER_PACKAGE}" == "true" && "${BUILD_PRODUCT}" != "ENTERPRISE" ]]; th
 fi
 
 container_build_targets=("${BUILD_TARGETS[@]}")
+if [[ "${WINDOWS_MSI_LOCAL}" == "true" ]]; then
+    windows_compile_targets=()
+    has_all_target="false"
+    for target in "${container_build_targets[@]}"; do
+        if [[ "${target}" == "installer" ]]; then
+            continue
+        fi
+        windows_compile_targets+=("${target}")
+        if [[ "${target}" == "all" ]]; then
+            has_all_target="true"
+        fi
+    done
+    if [[ "${has_all_target}" == "false" ]]; then
+        windows_compile_targets+=(all)
+    fi
+    container_build_targets=("${windows_compile_targets[@]}")
+fi
 if [[ "${RUN_TESTS}" == "true" ]]; then
     has_tests_target="false"
     for target in "${container_build_targets[@]}"; do
@@ -487,16 +541,18 @@ if [[ "${WINDOWS_MSVC}" == "true" ]]; then
 
     echo "Staging an isolated Windows build source tree..."
     COPYFILE_DISABLE=1 tar -czf "${windows_source_archive}" \
-        --exclude './.git' \
-        --exclude './.cache' \
-        --exclude './.mypy_cache' \
-        --exclude './.nox' \
-        --exclude './.ruff_cache' \
-        --exclude './.venv' \
-        --exclude './build' \
-        --exclude './build-*' \
-        --exclude './e2e' \
-        --exclude './eyebrow-linux-build' \
+        --exclude '^./.git' \
+        --exclude '^./.cache' \
+        --exclude '^./.mypy_cache' \
+        --exclude '^./.nox' \
+        --exclude '^./.ruff_cache' \
+        --exclude '^./.venv' \
+        --exclude '^./build' \
+        --exclude '^./build/*' \
+        --exclude '^./build-*' \
+        --exclude '^./build-*/*' \
+        --exclude '^./e2e' \
+        --exclude '^./eyebrow-linux-build' \
         -C "${REPO_ROOT}" .
     tar -xzf "${windows_source_archive}" -C "${windows_source_directory}"
     patch -d "${windows_source_directory}" -p1 \
@@ -660,9 +716,16 @@ if [[ "${WINDOWS_MSVC}" == "true" ]]; then
         --cmake_add_define CMAKE_SHARED_LINKER_FLAGS "\${windows_linker_flags}"
         --cmake_add_define CMAKE_MODULE_LINKER_FLAGS "\${windows_linker_flags}"
     )
-    configure_args+=(
-        --cmake_add_define TE_SKIP_INSTALLER ON
-    )
+    configure_args+=(--cmake_add_define TE_SKIP_WINDOWS_MIDL_TOOLS ON)
+    if [[ "${WINDOWS_MSI_LOCAL}" == "true" ]]; then
+        configure_args+=(
+            --cmake_add_define CMAKE_SUPPRESS_REGENERATION ON
+            --cmake_add_define TE_MSVC_REDIST_DIR /opt/msvc-redist
+            --cmake_add_define WIX_EXE /usr/local/bin/wix
+        )
+    else
+        configure_args+=(--cmake_add_define TE_SKIP_INSTALLER ON)
+    fi
 else
     configure_args+=(--linux_distro "${LINUX_DISTRO}")
 fi
@@ -698,7 +761,7 @@ build_cmake_targets() {
 
 build_cmake_targets "\${cmake_build_targets[@]}"
 
-if [[ "${RUN_TESTS}" == "true" ]]; then
+if [[ "${RUN_TESTS}" == "true" && "${WINDOWS_MSVC}" != "true" ]]; then
     test_args=(
         --build_dir "${BUILD_DIR}"
         --build_product "${BUILD_PRODUCT}"
@@ -718,6 +781,50 @@ EOF
 )
 
 docker run "${base_docker_run_args[@]}" "${image}" /bin/bash -lc "${container_script}"
+
+if [[ "${RUN_TESTS}" == "true" && "${WINDOWS_MSVC}" == "true" ]]; then
+    windows_test_vm_args=(
+        --repo-root "${REPO_ROOT}"
+        --build-dir "${BUILD_DIR}"
+        --configuration "${TEST_BUILD_CONFIG}"
+        --timeout "${TEST_TIMEOUT}"
+        --vm-host "${WINDOWS_VM_HOST}"
+        --vm-user "${WINDOWS_VM_USER}"
+        --vm-password-env "${WINDOWS_VM_PASSWORD_ENV}"
+        --vm-work-dir "${WINDOWS_VM_WORK_DIR}\\tests"
+    )
+    if [[ -n "${WINDOWS_VM_JUMP}" ]]; then
+        windows_test_vm_args+=(--vm-jump "${WINDOWS_VM_JUMP}")
+    fi
+    "${DIR}/windows/run-tests-vm.sh" "${windows_test_vm_args[@]}"
+fi
+
+if [[ "${WINDOWS_MSI_LOCAL}" == "true" ]]; then
+    wix_iidfile="${requirements_context}/wix-image-id"
+    echo "Building the WiX packaging image..."
+    docker build \
+        --network=host \
+        --allow network.host \
+        --iidfile "${wix_iidfile}" \
+        --file "${DIR}/windows/wix/Dockerfile" \
+        "${DIR}"
+    wix_image="$(<"${wix_iidfile}")"
+
+    echo "Building the unsigned Windows MSI with WiX..."
+    docker run \
+        "${base_docker_run_args[@]}" \
+        "${wix_image}" \
+        /usr/local/bin/build-msi "${BUILD_DIR}" "${TEST_BUILD_CONFIG}"
+
+    shopt -s nullglob
+    msi_files=("${REPO_ROOT}/${BUILD_DIR}/installer/win/"*.msi)
+    shopt -u nullglob
+    if [[ "${#msi_files[@]}" -eq 0 ]]; then
+        echo "WiX completed without producing an MSI in ${BUILD_DIR}/installer/win." >&2
+        exit 1
+    fi
+    printf 'Created local Windows MSI: %s\n' "${msi_files[@]}"
+fi
 
 if [[ "${PACKAGE_IN_CONTAINER}" == "true" ]]; then
     version_file="${REPO_ROOT}/${BUILD_DIR}/release/linux.version"

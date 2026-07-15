@@ -46,13 +46,16 @@ RUN apt install -y libmnl-dev libdbus-1-dev ccache e2fsprogs
 # so Linux builds use xwin to acquire the Windows SDK/MSVC headers and libraries, then compile
 # with clang-cl/lld-link.
 ARG INSTALL_WINDOWS_MSVC_TOOLCHAIN=false
+COPY windows/install-msvc-redist.sh /usr/local/bin/install-msvc-redist
 RUN if [ "${INSTALL_WINDOWS_MSVC_TOOLCHAIN}" = "true" ]; then \
       apt-get update && \
-      apt-get install -y --no-install-recommends pkg-config libssl-dev && \
+      apt-get install -y --no-install-recommends p7zip-full pkg-config libssl-dev && \
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
         sh -s -- -y --profile minimal && \
       /root/.cargo/bin/cargo install xwin --locked && \
       cp /root/.cargo/bin/xwin /usr/local/bin/xwin && \
+      chmod +x /usr/local/bin/install-msvc-redist && \
+      /usr/local/bin/install-msvc-redist && \
       grep -v '.cargo/env' /root/.profile > /tmp/root-profile && \
       mv /tmp/root-profile /root/.profile && \
       rm -rf /root/.cargo /root/.rustup; \
