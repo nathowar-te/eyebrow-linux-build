@@ -40,7 +40,7 @@ RUN --mount=from=python_requirements,source=requirements.txt,target=/tmp/require
  . venv/bin/activate && pip install -r /tmp/requirements.txt
 
 # Linux build dependencies
-RUN apt install -y libmnl-dev libdbus-1-dev ccache e2fsprogs
+RUN apt install -y libmnl-dev libdbus-1-dev ccache e2fsprogs bc
 
 # Optional Windows/MSVC ABI cross-build support. Visual Studio Build Tools are Windows-only,
 # so Linux builds use xwin to acquire the Windows SDK/MSVC headers and libraries, then compile

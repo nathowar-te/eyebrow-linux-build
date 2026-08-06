@@ -584,6 +584,8 @@ base_docker_run_args=(
     -v "${HOME}/.ssh:/root/.ssh"
     -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
     -e SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
+    -e TE_ARTIFACTORY_THIRDPARTY_USERNAME
+    -e TE_ARTIFACTORY_THIRDPARTY_PASSWORD
     -v "${LOGDIR}:/var/log"
     -w /build
     --cap-add NET_ADMIN

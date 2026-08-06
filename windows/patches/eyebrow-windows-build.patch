@@ -66,55 +66,6 @@ index 0000000000..566d056339
 ++{
 ++    return WSAPoll(fdArray, fds, timeout);
 ++}
-diff --git a/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h b/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
---- a/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
-+++ b/libraries/unibrow/base/include/unibrow/base/win/ProviderUniqueResource.h
-@@ -12,3 +12,9 @@
--template <typename Provider, auto closeFunction>
--using ProviderUniqueHFile =
--    ProviderUniqueResource<HANDLE, Provider, closeFunction, INVALID_HANDLE_VALUE>;
-+#if defined(__clang__)
-+// Clang does not permit INVALID_HANDLE_VALUE as a pointer-valued non-type template argument.
-+template <typename Provider, auto closeFunction>
-+using ProviderUniqueHFile = ProviderUniqueHandle<Provider, closeFunction>;
-+#else
-+template <typename Provider, auto closeFunction>
-+using ProviderUniqueHFile =
-+    ProviderUniqueResource<HANDLE, Provider, closeFunction, INVALID_HANDLE_VALUE>;
-+#endif
-diff --git a/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp b/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
---- a/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
-+++ b/libraries/unibrow/system/src/win/WinSystemMetricsService.cpp
-@@ -389,15 +389,14 @@
--        WinSystemMetricsProvider::uniqueHandle hBattery{
--            provider_->createFileW(devicePath.c_str(),
--                                   GENERIC_READ | GENERIC_WRITE,
--                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
--                                   nullptr,
--                                   OPEN_EXISTING,
--                                   FILE_ATTRIBUTE_NORMAL,
--                                   nullptr),
--            provider_};
--
--        if (!hBattery.isValid()) {
--            result.batteryProfiles.emplace_back(
--                makeErrorBatteryProfile(::GetLastError(), "CreateFile for battery device"));
--            continue;
--        }
-+        const HANDLE batteryHandle = provider_->createFileW(devicePath.c_str(),
-+                                                            GENERIC_READ | GENERIC_WRITE,
-+                                                            FILE_SHARE_READ | FILE_SHARE_WRITE,
-+                                                            nullptr,
-+                                                            OPEN_EXISTING,
-+                                                            FILE_ATTRIBUTE_NORMAL,
-+                                                            nullptr);
-+        if (batteryHandle == INVALID_HANDLE_VALUE) {
-+            result.batteryProfiles.emplace_back(
-+                makeErrorBatteryProfile(::GetLastError(), "CreateFile for battery device"));
-+            continue;
-+        }
-+
-+        WinSystemMetricsProvider::uniqueHandle hBattery{batteryHandle, provider_};
 diff --git a/programs/agent/src/win/platform.cmake b/programs/agent/src/win/platform.cmake
 --- a/programs/agent/src/win/platform.cmake
 +++ b/programs/agent/src/win/platform.cmake
